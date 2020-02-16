@@ -3,8 +3,7 @@ import json
 import os
 import random
 import sys
-from collections import namedtuple
-
+from collections import namedtuple, Counter
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -160,7 +159,7 @@ class State(object):  # 某游戏的状态，例如模拟一个数相加等于1�
         return next_state
 
 
-def PUCT(node, Policy_net, is_exploration):  # 若子节点都扩展完了，求UCB值最大的子节点
+def PUCT(node, is_exploration):  # 若子节点都扩展完了，求UCB值最大的子节点
     best_score = -sys.maxsize
     best_sub_node = None
     state = Policy_net.analysis_state(node.get_state().state_tup)
@@ -211,7 +210,7 @@ def expand_child(node):  # 得到未扩展的子节点
     return sub_node
 
 
-def select_node_to_simulate(node, Policy_net):  # 选择子节点的策略
+def select_node_to_simulate(node):  # 选择子节点的策略
     """
     选择扩展节点的策略，如果当前节点的有子节点未被扩展过，则选择一个扩展。
     若全部扩展过，就选择最优节点（PUCT策略选择）
@@ -221,14 +220,14 @@ def select_node_to_simulate(node, Policy_net):  # 选择子节点的策略
     """
     while not node.get_state().is_terminal():
         if node.is_all_expand():
-            node = PUCT(node, Policy_net, True)
+            node = PUCT(node, True)
         else:
             sub_node = expand_child(node)
             return sub_node
     return node
 
 
-def simulate(node, Policy_net):
+def simulate(node):
     """
     模拟该节点，获得最终可能回报
     终止条件： 2.仿真10步长（状态自身计数） 3.没有可选动作(MCTS中没有-1状态或者节点，但是在Policy action中有-1动作。
@@ -267,13 +266,13 @@ def MCTS_main(node):  # 蒙特卡洛树搜索总函数
     return best_next_node
 
 
-def Policy_MCTS(node, Policy_net):
+def Policy_MCTS(node, ):
     computation_budget = 100  # 模拟的最大次数
     for i in range(computation_budget):
-        expend_node = select_node_to_simulate(node, Policy_net)
-        reward = simulate(expend_node, Policy_net)
+        expend_node = select_node_to_simulate(node)
+        reward = simulate(expend_node)
         backup(expend_node, reward)
-    best_next_node = PUCT(node, Policy_net, True)
+    best_next_node = PUCT(node, True)
     return best_next_node
 
 
@@ -490,6 +489,12 @@ class QNet(nn.Module):
         return self.action_candidate, Qsa_value
 
 
+def policy_move(node):
+    # MCTS->action->next_node
+
+    return Policy_MCTS(node)
+
+
 class DQN:
     capacity = 2000
     learning_rate = 1e-3
@@ -501,52 +506,57 @@ class DQN:
     def __init__(self):
         super(DQN, self).__init__()
         self.policy_net = QNet()
-        self.policy_net.load_state_dict(torch.load('E:\AAAAA\BiYeSheJi\Model\\actnet_model\\3500.model'))
+        self.policy_net.load_state_dict(torch.load('E:\\AAAAA\\BiYeSheJi\\Result\\actnet_model\\3500.model'))
         self.writer = SummaryWriter(config.Summary_dir)
 
-    def policy_move(self, node):
-        # MCTS->action->next_node
 
-        return Policy_MCTS(node, self.policy_net)
+def sub_main(root, precision_queue):
+    paths = []
+    targets = []
+    # node_t 是经历一次蒙特卡洛树搜索后根据UCT选择的最好下一节点,每一次预测进行20次MCTS
+    for pathnum in range(10):
+        path = [root.state.state_tup, ]
+        node_t = root
+        while node_t.state.current_node != -1:
+            node_t = policy_move(node_t)
+            if node_t is not None:
+                path.append(node_t.state.current_node)
+                path.append(node_t.state.state_tup)
+            else:
+                break
+        # paths.append(tuple(path))
+        targets.append(path[-2])
+    print("target:{}".format(root.state.target_node))
+    maxNum_target = Counter(targets).most_common(1)
+    print(maxNum_target)
+    # maxNum_path = Counter(paths).most_common(1)
+    if maxNum_target[0][0] == root.state.target_node:
+        precision_queue.put(1)
+    else:
+        precision_queue.put(0)
 
 
 def main():
-    from collections import Counter
-
-    agentP = DQN()
-    total = 0
+    from multiprocessing import Pool
+    from multiprocessing import Manager
+    pool = Pool(5)
     isright = 0
-
+    precision_queue = Manager().Queue()
     for i_ep, root in enumerate(env.TreeList):
-        # node_t 是经历一次蒙特卡洛树搜索后根据UCT选择的最好下一节点,每一次预测进行20次MCTS
-        total += 1
-        paths = []
-        targets = []
-        for pathnum in range(20):
-            path = [root.state.state_tup, ]
-            node_t = root
-            while node_t.state.current_node != -1:
-                node_t = agentP.policy_move(node_t)
-                if node_t is not None:
-                    path.append(node_t.state.current_node)
-                    path.append(node_t.state.state_tup)
-                else:
-                    break
+        pool.apply_async(func=sub_main, args=(root, precision_queue))
+    pool.close()
+    pool.join()
 
-            # paths.append(tuple(path))
-            targets.append(path[-2])
-        print("target:{}".format(root.state.target_node))
-        maxNum_target = Counter(targets).most_common(1)
-        print(maxNum_target)
-        # maxNum_path = Counter(paths).most_common(1)
-        if maxNum_target[0][0] == root.state.target_node:
-            isright += 1
+    ql = precision_queue.qsize()
+    for i in range(ql):
+        isright += precision_queue.get_nowait()
+    print(isright/precision_queue.qsize())
 
-    print(isright/total)
-
-        # agentP.writer.add_scalar('find_target/step', find_target, global_step=i_ep)
+    # agentP.writer.add_scalar('find_target/step', find_target, global_step=i_ep)
 
 
+agentP = DQN()
+Policy_net = agentP.policy_net
 if __name__ == '__main__':
     from BiYeSheJi.Module.environment import Environment
 
