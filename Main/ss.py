@@ -233,7 +233,7 @@ class DQN:
     def __init__(self):
         super(DQN, self).__init__()
         self.target_net, self.act_net = QNet(), QNet()
-        self.target_net.load_state_dict(torch.load('E:\AAAAA\BiYeSheJi\Model\\actnet_model\\final.model'))
+        self.target_net.load_state_dict(torch.load('E:\AAAAA\BiYeSheJi\Model\\actnet_model\\2000.model'))
         self.memory = [None] * self.capacity
         self.optimizer = optim.Adam(self.act_net.parameters(), self.learning_rate)
         self.loss_func = nn.MSELoss()
@@ -314,16 +314,14 @@ def main():
 
 
 if __name__ == '__main__':
-    a = torch.tensor([1, 2, 3, 5, 1, 2])
 
     i = 0
     agent = DQN()
     state = [4, 2]
     action = 0
-    while action != -1 and len(state)\
-            :
+    while action != -1 and len(state) < 10:
         data = agent.target_net.analysis_state(state)
         A, Q = agent.target_net(data)
         action = A[Q.max(1)[1]]
         state.append(action)
-    print(state)
+        print(state)
